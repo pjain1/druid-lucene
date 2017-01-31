@@ -20,13 +20,13 @@ package io.druid.extension.lucene;
 
 import com.google.common.collect.Lists;
 import com.metamx.emitter.EmittingLogger;
-
 import io.druid.data.input.InputRow;
+import io.druid.query.SegmentDescriptor;
 import io.druid.segment.QueryableIndex;
 import io.druid.segment.Segment;
 import io.druid.segment.StorageAdapter;
 import io.druid.segment.realtime.appenderator.SegmentIdentifier;
-
+import io.druid.timeline.DataSegment;
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.analysis.standard.StandardAnalyzer;
 import org.apache.lucene.document.Document;
@@ -68,8 +68,10 @@ public class LuceneDruidSegment implements Segment
   private final Object refreshLock = new Object();
   private ConcurrentLinkedQueue<DirectoryReader> persistedReaders = new ConcurrentLinkedQueue<DirectoryReader>();
 
-  private static IndexWriter buildRamWriter(RAMDirectory dir,
-      Analyzer analyzer, int maxDocsPerSegment) throws IOException
+  private static IndexWriter buildRamWriter(
+      RAMDirectory dir,
+      Analyzer analyzer, int maxDocsPerSegment
+  ) throws IOException
   {
     IndexWriterConfig writerConfig = new IndexWriterConfig(analyzer);
     writerConfig.setOpenMode(OpenMode.CREATE_OR_APPEND);
@@ -100,13 +102,17 @@ public class LuceneDruidSegment implements Segment
     return new File(basePersistDir, UUID.randomUUID().toString());
   }
 
-  public LuceneDruidSegment(SegmentIdentifier segmentIdentifier,
+  public LuceneDruidSegment(
+      SegmentIdentifier segmentIdentifier,
       File basePersistDir, LuceneDocumentBuilder docBuilder,
-      int maxDocsPerSegment) throws IOException
+      int maxDocsPerSegment
+  ) throws IOException
   {
     this.segmentIdentifier = segmentIdentifier;
-    this.persistDir = new File(basePersistDir,
-        segmentIdentifier.getIdentifierAsString());
+    this.persistDir = new File(
+        basePersistDir,
+        segmentIdentifier.getIdentifierAsString()
+    );
     this.docBuilder = docBuilder;
     this.maxRowsPerSegment = maxDocsPerSegment;
     this.numRowsPersisted = 0;
@@ -114,23 +120,34 @@ public class LuceneDruidSegment implements Segment
     reset();
   }
 
+  public LuceneDruidSegment(SegmentIdentifier segmentIdentifier, DirectoryReader reader)
+  {
+    this.segmentIdentifier = segmentIdentifier;
+    this.numRowsPersisted = reader.numDocs();
+    this.persistedReaders.add(reader);
+    // assign defaults to unused variables
+    this.persistDir = null;
+    this.docBuilder = null;
+    this.maxRowsPerSegment = -1;
+    this.isOpen = false;
+  }
+
   private void ensureOpen()
   {
-    if (!isOpen)
-    {
+    if (!isOpen) {
       throw new AlreadyClosedException("segment already closed");
     }
   }
 
   private void reset() throws IOException
   {
-    if (!isOpen)
-    {
+    if (!isOpen) {
       return;
     }
     ramDir = new RAMDirectory();
     ramWriter = buildRamWriter(ramDir, new StandardAnalyzer(),
-        maxRowsPerSegment);
+                               maxRowsPerSegment
+    );
     numRowsAdded = 0;
     this.realtimeReader = null;
   }
@@ -140,6 +157,7 @@ public class LuceneDruidSegment implements Segment
    * index refresh thread.
    *
    * @param row
+   *
    * @throws IOException
    */
   public void add(InputRow row) throws IOException
@@ -148,8 +166,7 @@ public class LuceneDruidSegment implements Segment
     Document doc = docBuilder.buildLuceneDocument(row);
     ramWriter.addDocument(doc);
     numRowsAdded++;
-    if (numRowsAdded >= maxRowsPerSegment)
-    {
+    if (numRowsAdded >= maxRowsPerSegment) {
       persist();
       reset();
     }
@@ -164,23 +181,17 @@ public class LuceneDruidSegment implements Segment
    */
   public void refreshRealtimeReader() throws IOException
   {
-    synchronized (refreshLock)
-    {
-      if (!isOpen)
-      {
+    synchronized (refreshLock) {
+      if (!isOpen) {
         return;
       }
-      if (ramWriter != null)
-      {
-        if (realtimeReader == null)
-        {
+      if (ramWriter != null) {
+        if (realtimeReader == null) {
           realtimeReader = DirectoryReader.open(ramWriter);
-        } else
-        {
+        } else {
           DirectoryReader newReader = DirectoryReader.openIfChanged(
               realtimeReader, ramWriter);
-          if (newReader != null)
-          {
+          if (newReader != null) {
             DirectoryReader tmpReader = realtimeReader;
             realtimeReader = newReader;
             tmpReader.close();
@@ -195,23 +206,22 @@ public class LuceneDruidSegment implements Segment
    * and cannot be blocking.
    *
    * @return an index reader containing in memory realtime index as well as
-   *         persisted indexes. Null if the index is either closed or has no
-   *         documents yet indexed.
+   * persisted indexes. Null if the index is either closed or has no
+   * documents yet indexed.
+   *
    * @throws IOException
    */
   public IndexReader getIndexReader() throws IOException
   {
     // let's not build a reader if
-    if (!isOpen)
-    {
-      return null;
-    }
+    //if (!isOpen) {
+    //  return null;
+    //}
     List<DirectoryReader> readers = Lists
         .newArrayListWithCapacity(persistedReaders.size() + 1);
     readers.addAll(persistedReaders);
     DirectoryReader localReaderRef = realtimeReader;
-    if (localReaderRef != null)
-    {
+    if (localReaderRef != null) {
       readers.add(localReaderRef);
     }
     return readers.isEmpty() ? null : new MultiReader(
@@ -226,11 +236,23 @@ public class LuceneDruidSegment implements Segment
    */
   public void persist() throws IOException
   {
-    synchronized (refreshLock)
-    {
+    synchronized (refreshLock) {
+      /* From the documentation of FSDirectory -
+      *  Currently this returns {@link MMapDirectory} for Linux, MacOSX, Solaris,
+      *  and Windows 64-bit JREs, {@link NIOFSDirectory} for other
+      *  non-Windows JREs, and {@link SimpleFSDirectory} for other
+      *  JREs on Windows. It is highly recommended that you consult the
+      *  implementation's documentation for your platform before
+      *  using this method.*/
+      if (!isIndexWritable()) {
+        return;
+      }
+      ensureOpen();
+      // Call commit on ramWriter first and then check numDocs(), persist if > 0
+
       FSDirectory luceneDir = FSDirectory.open(indexDir(persistDir).toPath());
-      try (IndexWriter persistWriter = buildPersistWriter(luceneDir))
-      {
+      log.info("Persisting segment to dir [%s]", luceneDir.getDirectory());
+      try (IndexWriter persistWriter = buildPersistWriter(luceneDir)) {
         ramWriter.commit();
         ramWriter.close();
         ramWriter = null;
@@ -242,12 +264,16 @@ public class LuceneDruidSegment implements Segment
         persistedReaders.add(reader);
         DirectoryReader tmpReader = realtimeReader;
         realtimeReader = null;
-        if (tmpReader != null)
-        {
+        if (tmpReader != null) {
           tmpReader.close();
         }
       }
     }
+  }
+
+  private boolean isIndexWritable()
+  {
+    return ramWriter != null && ramWriter.numDocs() > 0;
   }
 
   /**
@@ -257,34 +283,31 @@ public class LuceneDruidSegment implements Segment
   @Override
   public void close() throws IOException
   {
-    synchronized (refreshLock)
-    {
-      ensureOpen();
+    synchronized (refreshLock) {
+      //ensureOpen();
+      if (!isOpen) {
+        return;
+      }
       isOpen = false;
-      try
-      {
+      try {
         if (ramWriter != null) {
-          if (ramWriter.numDocs() > 0)
-          {
+          if (ramWriter.numDocs() > 0) {
             persist();
           }
           ramWriter.close();
           ramWriter = null;
         }
-        if (realtimeReader != null)
-        {
+        if (realtimeReader != null) {
           realtimeReader.close();
           realtimeReader = null;
         }
-      } finally
-      {
-        for (DirectoryReader reader : persistedReaders)
-        {
-          try
-          {
+      }
+      finally {
+        for (DirectoryReader reader : persistedReaders) {
+          try {
             reader.close();
-          } catch (IOException ioe)
-          {
+          }
+          catch (IOException ioe) {
             log.error(ioe.getMessage(), ioe);
           }
         }
@@ -297,6 +320,15 @@ public class LuceneDruidSegment implements Segment
   public String getIdentifier()
   {
     return segmentIdentifier.getIdentifierAsString();
+  }
+
+  public SegmentDescriptor getSegmentDescriptor()
+  {
+    return new SegmentDescriptor(
+        segmentIdentifier.getInterval(),
+        segmentIdentifier.getVersion(),
+        segmentIdentifier.getShardSpec().getPartitionNum()
+    );
   }
 
   @Override
@@ -322,19 +354,33 @@ public class LuceneDruidSegment implements Segment
   public int numRows()
   {
     return (realtimeReader == null ? 0 : realtimeReader.numDocs())
-        + numRowsPersisted;
+           + numRowsPersisted;
   }
 
   @Override
   public <T> T as(Class<T> clazz)
   {
-    if (clazz.equals(LuceneDruidSegment.class))
-    {
+    if (clazz.equals(LuceneDruidSegment.class)) {
       return (T) this;
-    } else
-    {
+    } else {
       return null;
     }
   }
 
+  public File getPersistDir()
+  {
+    return persistDir;
+  }
+
+  public static LuceneDruidSegment fromPersistedDir(DataSegment dataSegment, File basePath) throws IOException
+  {
+    DruidDirectory druidDirectory = new DruidDirectory(basePath);
+    LuceneDruidSegment luceneDruidSegment = new LuceneDruidSegment(new SegmentIdentifier(
+        dataSegment.getDataSource(),
+        dataSegment.getInterval(),
+        dataSegment.getVersion(),
+        dataSegment.getShardSpec()
+    ), DirectoryReader.open(druidDirectory));
+    return luceneDruidSegment;
+  }
 }

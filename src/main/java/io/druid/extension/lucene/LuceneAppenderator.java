@@ -19,7 +19,9 @@
 package io.druid.extension.lucene;
 
 import com.google.common.base.Function;
+import com.google.common.base.Stopwatch;
 import com.google.common.base.Supplier;
+import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
@@ -29,7 +31,6 @@ import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.metamx.common.guava.FunctionalIterable;
 import com.metamx.emitter.EmittingLogger;
-
 import io.druid.data.input.Committer;
 import io.druid.data.input.InputRow;
 import io.druid.query.BySegmentQueryRunner;
@@ -55,13 +56,14 @@ import io.druid.timeline.TimelineObjectHolder;
 import io.druid.timeline.VersionedIntervalTimeline;
 import io.druid.timeline.partition.PartitionChunk;
 import io.druid.timeline.partition.PartitionHolder;
-
 import org.joda.time.Interval;
 
+import java.io.File;
 import java.io.IOException;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.TimeUnit;
 
 public class LuceneAppenderator implements Appenderator, Runnable
 {
@@ -81,14 +83,16 @@ public class LuceneAppenderator implements Appenderator, Runnable
   private final VersionedIntervalTimeline<String, LuceneDruidSegment> timeline = new VersionedIntervalTimeline<>(
       Ordering.natural());
 
-  public LuceneAppenderator(DataSchema schema,
+  public LuceneAppenderator(
+      DataSchema schema,
       RealtimeTuningConfig realtimeTuningConfig,
       QueryRunnerFactoryConglomerate conglomerate,
-      ExecutorService queryExecutorService)
+      ExecutorService queryExecutorService
+  )
   {
     this.schema = schema;
     this.docBuilder = new LuceneDocumentBuilder(schema.getParser()
-        .getParseSpec().getDimensionsSpec());
+                                                      .getParseSpec().getDimensionsSpec());
     this.realtimeTuningConfig = realtimeTuningConfig;
     this.queryExecutorService = queryExecutorService;
     this.conglomerate = conglomerate;
@@ -103,8 +107,10 @@ public class LuceneAppenderator implements Appenderator, Runnable
   }
 
   @Override
-  public <T> QueryRunner<T> getQueryRunnerForIntervals(Query<T> query,
-      Iterable<Interval> intervals)
+  public <T> QueryRunner<T> getQueryRunnerForIntervals(
+      Query<T> query,
+      Iterable<Interval> intervals
+  )
   {
     final List<SegmentDescriptor> specs = Lists.newArrayList();
 
@@ -118,7 +124,8 @@ public class LuceneAppenderator implements Appenderator, Runnable
                     {
                       @Override
                       public Iterable<TimelineObjectHolder<String, LuceneDruidSegment>> apply(
-                          final Interval interval)
+                          final Interval interval
+                      )
                       {
                         return timeline.lookup(interval);
                       }
@@ -128,7 +135,8 @@ public class LuceneAppenderator implements Appenderator, Runnable
                     {
                       @Override
                       public Iterable<SegmentDescriptor> apply(
-                          final TimelineObjectHolder<String, LuceneDruidSegment> holder)
+                          final TimelineObjectHolder<String, LuceneDruidSegment> holder
+                      )
                       {
                         return FunctionalIterable
                             .create(holder.getObject())
@@ -137,38 +145,41 @@ public class LuceneAppenderator implements Appenderator, Runnable
                                 {
                                   @Override
                                   public SegmentDescriptor apply(
-                                      final PartitionChunk<LuceneDruidSegment> chunk)
+                                      final PartitionChunk<LuceneDruidSegment> chunk
+                                  )
                                   {
                                     return new SegmentDescriptor(holder
-                                        .getInterval(), holder.getVersion(),
-                                        chunk.getChunkNumber());
+                                                                     .getInterval(), holder.getVersion(),
+                                                                 chunk.getChunkNumber()
+                                    );
                                   }
                                 });
                       }
-                    }));
+                    })
+        );
 
     return getQueryRunnerForSegments(query, specs);
   }
 
   @Override
-  public <T> QueryRunner<T> getQueryRunnerForSegments(Query<T> query,
-      Iterable<SegmentDescriptor> specs)
+  public <T> QueryRunner<T> getQueryRunnerForSegments(
+      Query<T> query,
+      Iterable<SegmentDescriptor> specs
+  )
   {
     // We only handle one dataSource. Make sure it's in the list of names, then
     // ignore from here on out.
-    if (!query.getDataSource().getNames().contains(getDataSource()))
-    {
+    if (!query.getDataSource().getNames().contains(getDataSource())) {
       log.makeAlert("Received query for unknown dataSource")
-          .addData("dataSource", query.getDataSource()).emit();
+         .addData("dataSource", query.getDataSource()).emit();
       return new NoopQueryRunner<>();
     }
 
     final QueryRunnerFactory<T, Query<T>> factory = conglomerate
         .findFactory(query);
-    if (factory == null)
-    {
+    if (factory == null) {
       log.makeAlert("Unknown query type, [%s]", query.getClass())
-          .addData("dataSource", query.getDataSource()).emit();
+         .addData("dataSource", query.getDataSource()).emit();
       return new NoopQueryRunner<>();
     }
 
@@ -183,18 +194,18 @@ public class LuceneAppenderator implements Appenderator, Runnable
               public QueryRunner<T> apply(final SegmentDescriptor descriptor)
               {
                 final PartitionHolder<LuceneDruidSegment> holder = timeline
-                    .findEntry(descriptor.getInterval(),
-                        descriptor.getVersion());
-                if (holder == null)
-                {
+                    .findEntry(
+                        descriptor.getInterval(),
+                        descriptor.getVersion()
+                    );
+                if (holder == null) {
                   return new ReportTimelineMissingSegmentQueryRunner<>(
                       descriptor);
                 }
 
                 final PartitionChunk<LuceneDruidSegment> chunk = holder
                     .getChunk(descriptor.getPartitionNumber());
-                if (chunk == null)
-                {
+                if (chunk == null) {
                   return new ReportTimelineMissingSegmentQueryRunner<>(
                       descriptor);
                 }
@@ -203,11 +214,13 @@ public class LuceneAppenderator implements Appenderator, Runnable
 
                 return new SpecificSegmentQueryRunner<>(
                     new BySegmentQueryRunner<>(segment.getIdentifier(),
-                        descriptor.getInterval().getStart(), factory
-                            .createRunner(segment)), new SpecificSegmentSpec(
-                        descriptor));
+                                               descriptor.getInterval().getStart(), factory
+                                                   .createRunner(segment)
+                    ), new SpecificSegmentSpec(
+                    descriptor));
               }
-            })));
+            })
+    ));
   }
 
   @Override
@@ -218,27 +231,31 @@ public class LuceneAppenderator implements Appenderator, Runnable
   }
 
   @Override
-  public int add(SegmentIdentifier identifier, InputRow row,
-      Supplier<Committer> committerSupplier) throws IndexSizeExceededException,
-      SegmentNotWritableException
+  public int add(
+      SegmentIdentifier identifier, InputRow row,
+      Supplier<Committer> committerSupplier
+  ) throws IndexSizeExceededException,
+           SegmentNotWritableException
   {
     LuceneDruidSegment segment = segments.get(identifier);
 
-    try
-    {
-      if (segment == null)
-      {
+    try {
+      if (segment == null) {
         segment = new LuceneDruidSegment(identifier,
-            realtimeTuningConfig.getBasePersistDirectory(), docBuilder,
-            realtimeTuningConfig.getMaxRowsInMemory());
+                                         realtimeTuningConfig.getBasePersistDirectory(), docBuilder,
+                                         realtimeTuningConfig.getMaxRowsInMemory()
+        );
         segments.put(identifier, segment);
         timeline.add(identifier.getInterval(), identifier.getVersion(),
-            identifier.getShardSpec().createChunk(segment));
+                     identifier.getShardSpec().createChunk(segment)
+        );
+        // LuceneMetadata luceneMetadata = (LuceneMetadata) committerSupplier.get().getMetadata();
+        // luceneMetadata.segmentDirMap.put(segment.getSegmentDescriptor().toString(), segment.getPersistDir());
       }
       segment.add(row);
       return segment.numRows();
-    } catch (IOException ioe)
-    {
+    }
+    catch (IOException ioe) {
       ioe.printStackTrace();
       throw new SegmentNotWritableException(ioe.getMessage(), ioe);
     }
@@ -261,17 +278,24 @@ public class LuceneAppenderator implements Appenderator, Runnable
   public void clear() throws InterruptedException
   {
     for (Map.Entry<SegmentIdentifier, LuceneDruidSegment> entry : segments
-        .entrySet())
-    {
+        .entrySet()) {
       timeline.remove(entry.getKey().getInterval(),
-          entry.getKey().getVersion(), entry.getKey().getShardSpec()
-              .createChunk(entry.getValue()));
-      try
-      {
+                      entry.getKey().getVersion(), entry.getKey().getShardSpec()
+                                                        .createChunk(entry.getValue())
+      );
+      try {
         entry.getValue().close();
-      } catch (IOException e)
-      {
+      }
+      catch (IOException e) {
         log.error(e.getMessage(), e);
+      } finally {
+        try {
+          org.apache.commons.io.FileUtils.deleteDirectory(entry.getValue().getPersistDir());
+        }
+        catch (IOException e) {
+          log.error(e.getMessage(), e);
+          Throwables.propagate(e);
+        }
       }
     }
     segments.clear();
@@ -281,16 +305,15 @@ public class LuceneAppenderator implements Appenderator, Runnable
   public ListenableFuture<?> drop(SegmentIdentifier identifier)
   {
     final LuceneDruidSegment segment = segments.get(identifier);
-    if (segment != null)
-    {
+    if (segment != null) {
       timeline.remove(identifier.getInterval(), identifier.getVersion(),
-          identifier.getShardSpec().createChunk(segment));
+                      identifier.getShardSpec().createChunk(segment)
+      );
       segments.remove(identifier);
-      try
-      {
+      try {
         segment.close();
-      } catch (IOException e)
-      {
+      }
+      catch (IOException e) {
         log.error(e.getMessage(), e);
       }
     }
@@ -300,13 +323,11 @@ public class LuceneAppenderator implements Appenderator, Runnable
   @Override
   public ListenableFuture<Object> persistAll(Committer committer)
   {
-    for (LuceneDruidSegment segment : segments.values())
-    {
-      try
-      {
+    for (LuceneDruidSegment segment : segments.values()) {
+      try {
         segment.persist();
-      } catch (IOException e)
-      {
+      }
+      catch (IOException e) {
         log.error(e.getMessage(), e);
       }
     }
@@ -316,23 +337,44 @@ public class LuceneAppenderator implements Appenderator, Runnable
 
   @Override
   public ListenableFuture<SegmentsAndMetadata> push(
-      final List<SegmentIdentifier> identifiers, final Committer committer)
+      final List<SegmentIdentifier> identifiers, final Committer committer
+  )
   {
     // TODO - should persist to disk and push data to deep storage in a
     // background thread
+    persistAll(committer);
+
+    for (Map.Entry<SegmentIdentifier, LuceneDruidSegment> entry : segments.entrySet()) {
+      log.info("Closing and merging segment [%s]", entry.getKey());
+      try {
+        entry.getValue().close();
+        Stopwatch mergeWatch = Stopwatch.createStarted();
+        File mergedTarget = LuceneIndexMerger.merge(entry.getValue().getPersistDir());
+        log.info(
+            "Segment [%s] merged in [%d] mills at location [%s]",
+            entry.getKey(),
+            mergeWatch.elapsed(TimeUnit.MILLISECONDS),
+            mergedTarget
+        );
+        // TODO - push to deep storage and publish in metadata store
+      }
+      catch (IOException e) {
+        e.printStackTrace();
+      }
+    }
+
     return Futures.immediateFuture(new SegmentsAndMetadata(ImmutableList
-        .<DataSegment> of(), committer.getMetadata()));
+                                                               .<DataSegment>of(), committer.getMetadata()));
   }
 
   @Override
   public void close()
   {
     indexRefresher.interrupt();
-    try
-    {
+    try {
       indexRefresher.join();
-    } catch (InterruptedException e)
-    {
+    }
+    catch (InterruptedException e) {
       log.error(e.getMessage(), e);
     }
   }
@@ -340,28 +382,32 @@ public class LuceneAppenderator implements Appenderator, Runnable
   @Override
   public void run()
   {
-    while (!isClosed)
-    {
+    while (!isClosed) {
       log.info("refresh index segments");
-      for (LuceneDruidSegment segment : segments.values())
-      {
-        try
-        {
+      for (LuceneDruidSegment segment : segments.values()) {
+        try {
           segment.refreshRealtimeReader();
-        } catch (IOException e)
-        {
+        }
+        catch (IOException e) {
           log.error(e.getMessage(), e);
         }
       }
 
-      try
-      {
+      try {
         Thread.sleep(DEFAULT_INDEX_REFRESH_INTERVAL_SECONDS * 1000); // refresh
-                                                                     // eery
-      } catch (InterruptedException ie)
-      {
-        continue;
+        // eery
+      }
+      catch (InterruptedException ie) {
+        Thread.currentThread().interrupt();
+        throw new RuntimeException("Interrupted!!");
       }
     }
   }
+
+/*  public static class LuceneMetadata {
+    Map<String, File> segmentDirMap;
+    LuceneMetadata() {
+      segmentDirMap = new HashMap<>();
+    }
+  }*/
 }

@@ -19,6 +19,11 @@
 
 package io.druid.extension.lucene;
 
+import com.google.common.collect.ImmutableList;
+import com.google.inject.Inject;
+import com.metamx.common.guava.Sequence;
+import com.metamx.common.guava.Sequences;
+import com.metamx.emitter.EmittingLogger;
 import io.druid.query.ChainedExecutionQueryRunner;
 import io.druid.query.Query;
 import io.druid.query.QueryRunner;
@@ -26,11 +31,6 @@ import io.druid.query.QueryRunnerFactory;
 import io.druid.query.QueryWatcher;
 import io.druid.query.Result;
 import io.druid.segment.Segment;
-
-import java.io.IOException;
-import java.util.Map;
-import java.util.concurrent.ExecutorService;
-
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.analysis.standard.StandardAnalyzer;
 import org.apache.lucene.index.IndexReader;
@@ -39,11 +39,9 @@ import org.apache.lucene.search.IndexSearcher;
 import org.apache.lucene.search.MatchAllDocsQuery;
 import org.apache.lucene.search.TopDocs;
 
-import com.google.common.collect.ImmutableList;
-import com.google.inject.Inject;
-import com.metamx.common.guava.Sequence;
-import com.metamx.common.guava.Sequences;
-import com.metamx.emitter.EmittingLogger;
+import java.io.IOException;
+import java.util.Map;
+import java.util.concurrent.ExecutorService;
 
 public class LuceneQueryRunnerFactory implements
     QueryRunnerFactory<Result<LuceneQueryResultValue>, LuceneDruidQuery>
@@ -80,7 +78,7 @@ public class LuceneQueryRunnerFactory implements
     return new LuceneQueryToolChest();
   }
 
-  private static class LuceneQueryRunner implements
+   static class LuceneQueryRunner implements
       QueryRunner<Result<LuceneQueryResultValue>>
   {
     private final LuceneDruidSegment segment;
