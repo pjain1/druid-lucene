@@ -21,9 +21,9 @@ package io.druid.extension.lucene;
 
 import com.google.common.collect.ImmutableList;
 import com.google.inject.Inject;
-import com.metamx.common.guava.Sequence;
-import com.metamx.common.guava.Sequences;
 import com.metamx.emitter.EmittingLogger;
+import io.druid.java.util.common.guava.Sequence;
+import io.druid.java.util.common.guava.Sequences;
 import io.druid.query.ChainedExecutionQueryRunner;
 import io.druid.query.Query;
 import io.druid.query.QueryRunner;
@@ -58,7 +58,8 @@ public class LuceneQueryRunnerFactory implements
 
   @Override
   public QueryRunner<Result<LuceneQueryResultValue>> createRunner(
-      final Segment segment)
+      final Segment segment
+  )
   {
     return new LuceneQueryRunner(segment.as(LuceneDruidSegment.class));
   }
@@ -66,7 +67,8 @@ public class LuceneQueryRunnerFactory implements
   @Override
   public QueryRunner<Result<LuceneQueryResultValue>> mergeRunners(
       final ExecutorService queryExecutor,
-      final Iterable<QueryRunner<Result<LuceneQueryResultValue>>> runners)
+      final Iterable<QueryRunner<Result<LuceneQueryResultValue>>> runners
+  )
   {
     return new ChainedExecutionQueryRunner<Result<LuceneQueryResultValue>>(
         queryExecutor, watcher, runners);
@@ -78,7 +80,7 @@ public class LuceneQueryRunnerFactory implements
     return new LuceneQueryToolChest();
   }
 
-   static class LuceneQueryRunner implements
+  static class LuceneQueryRunner implements
       QueryRunner<Result<LuceneQueryResultValue>>
   {
     private final LuceneDruidSegment segment;
@@ -88,56 +90,59 @@ public class LuceneQueryRunnerFactory implements
       this.segment = segment;
     }
 
+
     @Override
     public Sequence<Result<LuceneQueryResultValue>> run(
-        final Query<Result<LuceneQueryResultValue>> query,
-        final Map<String, Object> responseContext)
+        Query<Result<LuceneQueryResultValue>> query, Map<String, Object> map
+    )
     {
       log.info("here... handling run");
       LuceneDruidQuery luceneDruidQuery = (LuceneDruidQuery) query;
       long numHits = 0;
 
       IndexReader reader = null;
-      try
-      {
+      try {
         reader = segment.getIndexReader();
         String queryString = luceneDruidQuery.getQueryString();
         log.info("query string: " + queryString);
         Analyzer analyzer = new StandardAnalyzer();
         QueryParser parser = new QueryParser(
             luceneDruidQuery.getDefaultField(), analyzer);
-        if (reader != null)
-        {
+        if (reader != null) {
           log.info("we have a reader to search with " + reader.numDocs()
-              + " docs");
+                   + " docs");
           org.apache.lucene.search.Query luceneQuery = (queryString == null || "*"
               .equals(queryString)) ? new MatchAllDocsQuery() : parser
-              .parse(queryString);
+                                                           .parse(queryString);
           log.info("lucene query: " + luceneQuery);
           IndexSearcher searcher = new IndexSearcher(reader);
           TopDocs td = searcher
               .search(luceneQuery, luceneDruidQuery.getCount());
           numHits = td.totalHits;
         }
-      } catch (Exception e)
-      {
+      }
+      catch (Exception e) {
         log.error(e, e.getMessage());
-      } finally
-      {
-        if (reader != null)
-        {
-          try
-          {
+      }
+      finally {
+        if (reader != null) {
+          try {
             reader.close();
-          } catch (IOException e)
-          {
+          }
+          catch (IOException e) {
             log.error(e.getMessage(), e);
           }
         }
       }
-      return Sequences.simple(ImmutableList.of(new Result<>(segment
-          .getDataInterval().getStart(), new LuceneQueryResultValue(numHits,
-          segment.numRows()))));
+      return Sequences.simple(ImmutableList.of(new Result<>(
+          segment
+              .getDataInterval()
+              .getStart(),
+          new LuceneQueryResultValue(
+              numHits,
+              segment.numRows()
+          )
+      )));
     }
   }
 }

@@ -16,8 +16,10 @@
  * specific language governing permissions and limitations
  * under the License.
  */
+
 package io.druid.extension.lucene;
 
+import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Lists;
 import com.metamx.emitter.EmittingLogger;
 import io.druid.data.input.InputRow;
@@ -331,6 +333,21 @@ public class LuceneDruidSegment implements Segment
     );
   }
 
+  public DataSegment getDataSegment()
+  {
+    return new DataSegment(
+        segmentIdentifier.getDataSource(),
+        segmentIdentifier.getInterval(),
+        segmentIdentifier.getVersion(),
+        ImmutableMap.<String, Object>of(),
+        Lists.<String>newArrayList(),
+        Lists.<String>newArrayList(),
+        segmentIdentifier.getShardSpec(),
+        null,
+        0
+    );
+  }
+
   @Override
   public Interval getDataInterval()
   {
@@ -375,12 +392,11 @@ public class LuceneDruidSegment implements Segment
   public static LuceneDruidSegment fromPersistedDir(DataSegment dataSegment, File basePath) throws IOException
   {
     DruidDirectory druidDirectory = new DruidDirectory(basePath);
-    LuceneDruidSegment luceneDruidSegment = new LuceneDruidSegment(new SegmentIdentifier(
+    return new LuceneDruidSegment(new SegmentIdentifier(
         dataSegment.getDataSource(),
         dataSegment.getInterval(),
         dataSegment.getVersion(),
         dataSegment.getShardSpec()
     ), DirectoryReader.open(druidDirectory));
-    return luceneDruidSegment;
   }
 }

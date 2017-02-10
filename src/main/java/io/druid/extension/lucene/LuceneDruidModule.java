@@ -24,11 +24,9 @@ import com.fasterxml.jackson.databind.jsontype.NamedType;
 import com.fasterxml.jackson.databind.module.SimpleModule;
 import com.google.common.collect.ImmutableList;
 import com.google.inject.Binder;
-
 import io.druid.guice.DruidBinders;
 import io.druid.guice.LazySingleton;
 import io.druid.initialization.DruidModule;
-import io.druid.segment.realtime.appenderator.AppenderatorPlumberSchool;
 
 import java.util.List;
 
@@ -40,8 +38,10 @@ public class LuceneDruidModule implements DruidModule
     return ImmutableList.of(
         new SimpleModule(LuceneDruidModule.class.getSimpleName())
             .registerSubtypes(
-                new NamedType(AppenderatorPlumberSchool.class, "appenderator"),
-                new NamedType(LuceneDruidQuery.class, "lucene")
+                new NamedType(LuceneDruidQuery.class, "lucene"),
+                new NamedType(LuceneSegmentizerFactory.class, "lucene"),
+                new NamedType(LuceneAppenderatorFactory.class, "lucene"),
+                new NamedType(LuceneAppenderatorCreator.class, "lucene")
             )
     );
   }

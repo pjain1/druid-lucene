@@ -16,9 +16,12 @@
  * specific language governing permissions and limitations
  * under the License.
  */
+
 package io.druid.extension.lucene;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.common.base.Function;
+import com.google.common.base.Preconditions;
 import com.google.common.base.Stopwatch;
 import com.google.common.base.Supplier;
 import com.google.common.base.Throwables;
@@ -29,10 +32,17 @@ import com.google.common.collect.Maps;
 import com.google.common.collect.Ordering;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
+import com.google.common.util.concurrent.ListeningExecutorService;
+import com.google.common.util.concurrent.MoreExecutors;
 import com.metamx.common.guava.FunctionalIterable;
 import com.metamx.emitter.EmittingLogger;
+import com.metamx.emitter.service.ServiceEmitter;
+import io.druid.common.guava.ThreadRenamingCallable;
+import io.druid.concurrent.Execs;
 import io.druid.data.input.Committer;
 import io.druid.data.input.InputRow;
+import io.druid.java.util.common.ISE;
+import io.druid.java.util.common.collect.JavaCompatUtils;
 import io.druid.query.BySegmentQueryRunner;
 import io.druid.query.NoopQueryRunner;
 import io.druid.query.Query;
@@ -46,22 +56,26 @@ import io.druid.query.spec.SpecificSegmentQueryRunner;
 import io.druid.query.spec.SpecificSegmentSpec;
 import io.druid.segment.incremental.IndexSizeExceededException;
 import io.druid.segment.indexing.DataSchema;
-import io.druid.segment.indexing.RealtimeTuningConfig;
+import io.druid.segment.loading.DataSegmentPusher;
 import io.druid.segment.realtime.appenderator.Appenderator;
+import io.druid.segment.realtime.appenderator.AppenderatorConfig;
 import io.druid.segment.realtime.appenderator.SegmentIdentifier;
 import io.druid.segment.realtime.appenderator.SegmentNotWritableException;
 import io.druid.segment.realtime.appenderator.SegmentsAndMetadata;
+import io.druid.server.coordination.DataSegmentAnnouncer;
 import io.druid.timeline.DataSegment;
 import io.druid.timeline.TimelineObjectHolder;
 import io.druid.timeline.VersionedIntervalTimeline;
 import io.druid.timeline.partition.PartitionChunk;
 import io.druid.timeline.partition.PartitionHolder;
+import org.apache.commons.io.FileUtils;
 import org.joda.time.Interval;
 
 import java.io.File;
 import java.io.IOException;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
 
@@ -74,30 +88,52 @@ public class LuceneAppenderator implements Appenderator, Runnable
   private final DataSchema schema;
   private final LuceneDocumentBuilder docBuilder;
   private final QueryRunnerFactoryConglomerate conglomerate;
-  private final RealtimeTuningConfig realtimeTuningConfig;
+  private final AppenderatorConfig appenderatorConfig;
   private final ExecutorService queryExecutorService;
+  private final ListeningExecutorService persistExecutor;
+  private final ListeningExecutorService pushExecutor;
   private final Thread indexRefresher;
+  private final ObjectMapper mapper;
+  private final DataSegmentPusher dataSegmentPusher;
+  private final DataSegmentAnnouncer dataSegmentAnnouncer;
+  private final ServiceEmitter emitter;
   private volatile boolean isClosed = false;
   private final Map<SegmentIdentifier, LuceneDruidSegment> segments = Maps
-      .newHashMap();
+      .newConcurrentMap();
   private final VersionedIntervalTimeline<String, LuceneDruidSegment> timeline = new VersionedIntervalTimeline<>(
       Ordering.natural());
 
   public LuceneAppenderator(
       DataSchema schema,
-      RealtimeTuningConfig realtimeTuningConfig,
+      AppenderatorConfig appenderatorConfig,
       QueryRunnerFactoryConglomerate conglomerate,
-      ExecutorService queryExecutorService
+      ExecutorService queryExecutorService,
+      ObjectMapper mapper,
+      DataSegmentPusher segmentPusher,
+      DataSegmentAnnouncer segmentAnnouncer,
+      ServiceEmitter emitter
   )
   {
-    this.schema = schema;
+    this.schema = Preconditions.checkNotNull(schema);
     this.docBuilder = new LuceneDocumentBuilder(schema.getParser()
                                                       .getParseSpec().getDimensionsSpec());
-    this.realtimeTuningConfig = realtimeTuningConfig;
-    this.queryExecutorService = queryExecutorService;
-    this.conglomerate = conglomerate;
+    this.appenderatorConfig = Preconditions.checkNotNull(appenderatorConfig);
+    this.queryExecutorService = Preconditions.checkNotNull(queryExecutorService);
+    this.conglomerate = Preconditions.checkNotNull(conglomerate);
+    this.mapper = Preconditions.checkNotNull(mapper);
+    this.dataSegmentAnnouncer = Preconditions.checkNotNull(segmentAnnouncer);
+    this.dataSegmentPusher = Preconditions.checkNotNull(segmentPusher);
+    this.emitter = Preconditions.checkNotNull(emitter);
     this.indexRefresher = new Thread(this, "lucene index refresher");
     this.indexRefresher.setDaemon(true);
+    this.persistExecutor = MoreExecutors.listeningDecorator(Execs.newBlockingSingleThreaded(
+        "lucene_appenderator_persister_%d",
+        0
+    ));
+    this.pushExecutor = MoreExecutors.listeningDecorator(Execs.newBlockingSingleThreaded(
+        "lucene_appenderator_pusher_%d",
+        0
+    ));
   }
 
   @Override
@@ -241,16 +277,17 @@ public class LuceneAppenderator implements Appenderator, Runnable
 
     try {
       if (segment == null) {
-        segment = new LuceneDruidSegment(identifier,
-                                         realtimeTuningConfig.getBasePersistDirectory(), docBuilder,
-                                         realtimeTuningConfig.getMaxRowsInMemory()
+        segment = new LuceneDruidSegment(
+            identifier,
+            appenderatorConfig.getBasePersistDirectory(),
+            docBuilder,
+            appenderatorConfig.getMaxRowsInMemory()
         );
         segments.put(identifier, segment);
         timeline.add(identifier.getInterval(), identifier.getVersion(),
                      identifier.getShardSpec().createChunk(segment)
         );
-        // LuceneMetadata luceneMetadata = (LuceneMetadata) committerSupplier.get().getMetadata();
-        // luceneMetadata.segmentDirMap.put(segment.getSegmentDescriptor().toString(), segment.getPersistDir());
+        dataSegmentAnnouncer.announceSegment(segment.getDataSegment());
       }
       segment.add(row);
       return segment.numRows();
@@ -277,28 +314,36 @@ public class LuceneAppenderator implements Appenderator, Runnable
   @Override
   public void clear() throws InterruptedException
   {
-    for (Map.Entry<SegmentIdentifier, LuceneDruidSegment> entry : segments
-        .entrySet()) {
-      timeline.remove(entry.getKey().getInterval(),
-                      entry.getKey().getVersion(), entry.getKey().getShardSpec()
-                                                        .createChunk(entry.getValue())
-      );
-      try {
-        entry.getValue().close();
-      }
-      catch (IOException e) {
-        log.error(e.getMessage(), e);
-      } finally {
-        try {
-          org.apache.commons.io.FileUtils.deleteDirectory(entry.getValue().getPersistDir());
-        }
-        catch (IOException e) {
-          log.error(e.getMessage(), e);
-          Throwables.propagate(e);
-        }
-      }
+    List<ListenableFuture<?>> futures = Lists.newArrayList();
+    for (SegmentIdentifier segmentIdentifier : JavaCompatUtils.keySet(segments)) {
+      futures.add(drop(segmentIdentifier));
     }
     segments.clear();
+    try {
+      Futures.allAsList(futures).get();
+    }
+    catch (ExecutionException e) {
+      Throwables.propagate(e);
+    }
+  }
+
+  /**
+   * Insert a barrier into the merge-and-push queue. When this future resolves, all pending pushes will have finished.
+   * This is useful if we're going to do something that would otherwise potentially break currently in-progress
+   * pushes.
+   */
+  private ListenableFuture<?> pushBarrier()
+  {
+    return pushExecutor.submit(
+        new Runnable()
+        {
+          @Override
+          public void run()
+          {
+            // Do nothing
+          }
+        }
+    );
   }
 
   @Override
@@ -306,16 +351,37 @@ public class LuceneAppenderator implements Appenderator, Runnable
   {
     final LuceneDruidSegment segment = segments.get(identifier);
     if (segment != null) {
-      timeline.remove(identifier.getInterval(), identifier.getVersion(),
-                      identifier.getShardSpec().createChunk(segment)
+      return Futures.transform(
+          pushBarrier(),
+          new Function<Object, Object>()
+          {
+            @Override
+            public Object apply(Object input)
+            {
+              timeline.remove(identifier.getInterval(), identifier.getVersion(),
+                              identifier.getShardSpec().createChunk(segment)
+              );
+              segments.remove(identifier);
+              try {
+                segment.close();
+                dataSegmentAnnouncer.unannounceSegment(segment.getDataSegment());
+              }
+              catch (IOException e) {
+                log.error(e.getMessage(), e);
+              }
+              finally {
+                try {
+                  FileUtils.deleteDirectory(segment.getPersistDir());
+                }
+                catch (IOException e) {
+                  log.makeAlert("Unable to delete directory: [%s], exception: [%s]", segment.getPersistDir(), e).emit();
+                }
+              }
+              return null;
+            }
+          },
+          persistExecutor
       );
-      segments.remove(identifier);
-      try {
-        segment.close();
-      }
-      catch (IOException e) {
-        log.error(e.getMessage(), e);
-      }
     }
     return Futures.immediateFuture(null);
   }
@@ -323,16 +389,26 @@ public class LuceneAppenderator implements Appenderator, Runnable
   @Override
   public ListenableFuture<Object> persistAll(Committer committer)
   {
-    for (LuceneDruidSegment segment : segments.values()) {
-      try {
-        segment.persist();
-      }
-      catch (IOException e) {
-        log.error(e.getMessage(), e);
-      }
-    }
-    committer.run();
-    return Futures.immediateFuture(null);
+    final String threadName = String.format("%s-incremental-persist", schema.getDataSource());
+    return persistExecutor.submit(
+        new ThreadRenamingCallable<Object>(threadName)
+        {
+          @Override
+          public Object doCall()
+          {
+            for (LuceneDruidSegment segment : segments.values()) {
+              try {
+                segment.persist();
+              }
+              catch (IOException e) {
+                log.error(e.getMessage(), e);
+              }
+            }
+            committer.run();
+            return committer.getMetadata();
+          }
+        }
+    );
   }
 
   @Override
@@ -340,42 +416,73 @@ public class LuceneAppenderator implements Appenderator, Runnable
       final List<SegmentIdentifier> identifiers, final Committer committer
   )
   {
-    // TODO - should persist to disk and push data to deep storage in a
-    // background thread
-    persistAll(committer);
+    return Futures.transform(
+        persistAll(committer),
+        new Function<Object, SegmentsAndMetadata>()
+        {
+          @Override
+          public SegmentsAndMetadata apply(Object commitMetadata)
+          {
+            final List<DataSegment> pushedSegments = Lists.newArrayList();
+            for (SegmentIdentifier segmentIdentifier : identifiers) {
+              log.info("Closing and merging segment [%s]", segmentIdentifier);
+              LuceneDruidSegment segment = segments.get(segmentIdentifier);
+              try {
+                segment.close();
+                final File pushedMarker = new File(segment.getPersistDir(), "pushed");
+                if (pushedMarker.exists()) {
+                  // Already pushed
+                  log.warn("Already pushed [%s]", segmentIdentifier);
+                  continue;
+                }
+                final Stopwatch mergeWatch = Stopwatch.createStarted();
+                final File smooshedTarget = LuceneIndexMerger.merge(segment.getPersistDir(), mapper);
 
-    for (Map.Entry<SegmentIdentifier, LuceneDruidSegment> entry : segments.entrySet()) {
-      log.info("Closing and merging segment [%s]", entry.getKey());
-      try {
-        entry.getValue().close();
-        Stopwatch mergeWatch = Stopwatch.createStarted();
-        File mergedTarget = LuceneIndexMerger.merge(entry.getValue().getPersistDir());
-        log.info(
-            "Segment [%s] merged in [%d] mills at location [%s]",
-            entry.getKey(),
-            mergeWatch.elapsed(TimeUnit.MILLISECONDS),
-            mergedTarget
-        );
-        // TODO - push to deep storage and publish in metadata store
-      }
-      catch (IOException e) {
-        e.printStackTrace();
-      }
-    }
+                log.info(
+                    "Segment [%s] merged in [%d] mills at location [%s]",
+                    segmentIdentifier,
+                    mergeWatch.elapsed(TimeUnit.MILLISECONDS),
+                    smooshedTarget
+                );
 
-    return Futures.immediateFuture(new SegmentsAndMetadata(ImmutableList
-                                                               .<DataSegment>of(), committer.getMetadata()));
+                DataSegment pushedSegment = dataSegmentPusher.push(
+                    smooshedTarget,
+                    segment.getDataSegment().withDimensions(schema.getParser()
+                                                                  .getParseSpec()
+                                                                  .getDimensionsSpec()
+                                                                  .getDimensionNames())
+                );
+                if(pushedSegment == null) {
+                  log.warn("Skipping segment [%s]", segmentIdentifier);
+                }
+                pushedSegments.add(pushedSegment);
+              }
+              catch (IOException e) {
+                log.makeAlert("Failed to push segment [%s]", segmentIdentifier).emit();
+                Throwables.propagate(e);
+              }
+            }
+            return new SegmentsAndMetadata(pushedSegments, committer.getMetadata());
+          }
+        },
+        pushExecutor
+    );
   }
 
   @Override
   public void close()
   {
-    indexRefresher.interrupt();
+    isClosed = true;
     try {
+      clear();
+      persistExecutor.shutdownNow();
+      pushExecutor.shutdownNow();
+      indexRefresher.interrupt();
       indexRefresher.join();
     }
     catch (InterruptedException e) {
-      log.error(e.getMessage(), e);
+      Thread.currentThread().interrupt();
+      throw new ISE("Failed to close() [%s]", e);
     }
   }
 
@@ -403,11 +510,4 @@ public class LuceneAppenderator implements Appenderator, Runnable
       }
     }
   }
-
-/*  public static class LuceneMetadata {
-    Map<String, File> segmentDirMap;
-    LuceneMetadata() {
-      segmentDirMap = new HashMap<>();
-    }
-  }*/
 }

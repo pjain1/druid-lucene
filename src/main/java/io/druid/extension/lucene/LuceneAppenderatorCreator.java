@@ -19,39 +19,32 @@
 
 package io.druid.extension.lucene;
 
-import com.fasterxml.jackson.annotation.JacksonInject;
-import com.fasterxml.jackson.annotation.JsonCreator;
-import io.druid.guice.annotations.Processing;
-import io.druid.query.QueryRunnerFactoryConglomerate;
+import io.druid.indexing.appenderator.AppenderatorCreator;
+import io.druid.indexing.common.TaskToolbox;
 import io.druid.segment.indexing.DataSchema;
 import io.druid.segment.indexing.RealtimeTuningConfig;
 import io.druid.segment.realtime.FireDepartmentMetrics;
 import io.druid.segment.realtime.appenderator.Appenderator;
-import io.druid.segment.realtime.appenderator.AppenderatorFactory;
 
-import java.util.concurrent.ExecutorService;
-
-public class LuceneAppenderatorFactory implements AppenderatorFactory
+public class LuceneAppenderatorCreator implements AppenderatorCreator
 {
-  private final QueryRunnerFactoryConglomerate conglomerate;
-  private final ExecutorService queryExecutorService;
-
-  @JsonCreator
-  public LuceneAppenderatorFactory(
-      @JacksonInject QueryRunnerFactoryConglomerate conglomerate,
-      @JacksonInject @Processing ExecutorService queryExecutorService
-  )
-  {
-    this.conglomerate = conglomerate;
-    this.queryExecutorService = queryExecutorService;
-  }
-
   @Override
   public Appenderator build(
-      DataSchema schema, RealtimeTuningConfig config,
-      FireDepartmentMetrics metrics
+      DataSchema schema,
+      RealtimeTuningConfig config,
+      FireDepartmentMetrics metrics,
+      TaskToolbox toolbox
   )
   {
-    return new LuceneAppenderator(schema, config, conglomerate, queryExecutorService, null, null, null, null);
+    return new LuceneAppenderator(
+        schema,
+        config,
+        toolbox.getQueryRunnerFactoryConglomerate(),
+        toolbox.getQueryExecutorService(),
+        toolbox.getObjectMapper(),
+        toolbox.getSegmentPusher(),
+        toolbox.getSegmentAnnouncer(),
+        toolbox.getEmitter()
+    );
   }
 }

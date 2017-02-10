@@ -30,12 +30,13 @@ import com.google.common.collect.Lists;
 import com.google.common.collect.Ordering;
 import com.google.common.io.Files;
 import com.google.common.util.concurrent.ListenableFuture;
-import com.metamx.common.guava.FunctionalIterable;
-import com.metamx.common.guava.Sequences;
+import com.metamx.emitter.service.ServiceMetricEvent;
 import io.druid.concurrent.Execs;
 import io.druid.data.input.Committer;
 import io.druid.data.input.InputRow;
 import io.druid.data.input.MapBasedInputRow;
+import io.druid.java.util.common.guava.FunctionalIterable;
+import io.druid.java.util.common.guava.Sequences;
 import io.druid.query.Query;
 import io.druid.query.QueryRunner;
 import io.druid.query.QueryRunnerFactory;
@@ -70,7 +71,6 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
@@ -178,8 +178,6 @@ public class LuceneAppenderatorTest
     final Map<String, File> segmentsDir = new HashMap<>();
     try (final LuceneAppenderatorTester tester = new LuceneAppenderatorTester(1, persistDir)) {
       final Appenderator appenderator = tester.getAppenderator();
-
-      //final ConcurrentMap<String, String> commitMetadata = new ConcurrentHashMap<>();
       final Supplier<Committer> committerSupplier = Suppliers.ofInstance(Committers.nil());
 
       // startJob
@@ -194,17 +192,6 @@ public class LuceneAppenderatorTest
       appenderator.add(IDENTIFIERS.get(2), IR("2001", "foo", 8), committerSupplier);
       appenderator.add(IDENTIFIERS.get(2), IR("2001T01", "foo", 16), committerSupplier);
       appenderator.add(IDENTIFIERS.get(2), IR("2001T02", "foo", 32), committerSupplier);
-
-      /*
-      // add
-      appenderator.add(IDENTIFIERS.get(0), IR("2000", "foo", 1), committerSupplier);
-      appenderator.add(IDENTIFIERS.get(0), IR("2000", "foo", 1), committerSupplier);
-      appenderator.add(IDENTIFIERS.get(0), IR("2000", "foo", 1), committerSupplier);
-
-      appenderator.add(IDENTIFIERS.get(1), IR("2000", "qux", 4), committerSupplier);
-      appenderator.add(IDENTIFIERS.get(1), IR("2000", "qux", 4), committerSupplier);
-      appenderator.add(IDENTIFIERS.get(1), IR("2000", "qux", 4), committerSupplier);
-      */
 
       appenderator.persistAll(committerSupplier.get());
 
@@ -464,23 +451,10 @@ public class LuceneAppenderatorTest
 
   public static void main(String[] args)
   {
-    Interval i1 = new Interval(0, 10);
-    Interval i2 = new Interval(1000000, 10000001);
-    Interval i3 = new Interval(10000, 100003);
-    TreeMap<Interval, Seg> map = new TreeMap<Interval, Seg>(new Comparator<Interval>()
-    {
-      @Override
-      public int compare(Interval o1, Interval o2)
-      {
-        return o1.getStart().compareTo(o2.getStart());
+
+      if (null instanceof ServiceMetricEvent) {
+        System.out.println("s");
       }
-    });
 
-  }
-
-  static class Seg
-  {
-    Interval interval;
-    String version;
   }
 }

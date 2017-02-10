@@ -25,8 +25,7 @@ public class DruidDirectory extends BaseDirectory
   public DruidDirectory(File basePath) throws IOException
   {
     // Since this directory is only used for reading lucene segments
-    // that's why using SingleInstanceLockFactory instead of NativeFSLockFactory
-    // which prevents concurrent access
+    // use SingleInstanceLockFactory instead of NativeFSLockFactory
     this(basePath, new SingleInstanceLockFactory());
   }
 

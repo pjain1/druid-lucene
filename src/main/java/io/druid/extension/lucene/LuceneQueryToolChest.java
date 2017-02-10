@@ -23,10 +23,9 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.google.common.base.Function;
 import com.google.common.base.Functions;
 import com.google.common.collect.Ordering;
-import com.metamx.common.guava.nary.BinaryFn;
 import com.metamx.emitter.service.ServiceMetricEvent;
-
 import io.druid.common.utils.JodaUtils;
+import io.druid.java.util.common.guava.nary.BinaryFn;
 import io.druid.query.DruidMetrics;
 import io.druid.query.Query;
 import io.druid.query.QueryRunner;
@@ -42,7 +41,8 @@ public class LuceneQueryToolChest extends
 {
   @Override
   public QueryRunner<Result<LuceneQueryResultValue>> mergeResults(
-      final QueryRunner<Result<LuceneQueryResultValue>> baseRunner)
+      final QueryRunner<Result<LuceneQueryResultValue>> baseRunner
+  )
 
   {
     return new ResultMergeQueryRunner<Result<LuceneQueryResultValue>>(
@@ -50,51 +50,60 @@ public class LuceneQueryToolChest extends
     {
       @Override
       protected Ordering<Result<LuceneQueryResultValue>> makeOrdering(
-          final Query<Result<LuceneQueryResultValue>> query)
+          final Query<Result<LuceneQueryResultValue>> query
+      )
       {
         return (Ordering) Ordering.allEqual().nullsFirst();
       }
 
       @Override
       protected BinaryFn<Result<LuceneQueryResultValue>, Result<LuceneQueryResultValue>, Result<LuceneQueryResultValue>> createMergeFn(
-          final Query<Result<LuceneQueryResultValue>> query)
+          Query<Result<LuceneQueryResultValue>> query
+      )
       {
         return new BinaryFn<Result<LuceneQueryResultValue>, Result<LuceneQueryResultValue>, Result<LuceneQueryResultValue>>()
         {
           @Override
           public Result<LuceneQueryResultValue> apply(
               @Nullable Result<LuceneQueryResultValue> result1,
-              @Nullable Result<LuceneQueryResultValue> result2)
+              @Nullable Result<LuceneQueryResultValue> result2
+          )
           {
-            if (result1 == null)
-            {
+            if (result1 == null) {
               return result2;
-            } else if (result2 == null)
-            {
+            } else if (result2 == null) {
               return result1;
-            } else
-            {
-              return new Result<>(JodaUtils.minDateTime(result1.getTimestamp(),
-                  result2.getTimestamp()), new LuceneQueryResultValue(result1
-                  .getValue().getSize() + result1.getValue().getSize(), result1
-                  .getValue().getCount() + result2.getValue().getCount()));
+            } else {
+              return new Result<>(JodaUtils.minDateTime(
+                  result1.getTimestamp(),
+                  result2.getTimestamp()
+              ), new LuceneQueryResultValue(result1
+                                                .getValue().getSize() + result1.getValue().getSize(), result1
+                                                                                                          .getValue()
+                                                                                                          .getCount()
+                                                                                                      + result2.getValue()
+                                                                                                               .getCount()));
             }
           }
         };
       }
+
+
     };
   }
 
   @Override
   public ServiceMetricEvent.Builder makeMetricBuilder(
-      final LuceneDruidQuery query)
+      final LuceneDruidQuery query
+  )
   {
     return DruidMetrics.makePartialQueryTimeMetric(query);
   }
 
   @Override
   public Function<Result<LuceneQueryResultValue>, Result<LuceneQueryResultValue>> makePreComputeManipulatorFn(
-      final LuceneDruidQuery query, final MetricManipulationFn fn)
+      final LuceneDruidQuery query, final MetricManipulationFn fn
+  )
   {
     return Functions.identity();
   }
