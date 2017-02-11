@@ -36,17 +36,12 @@ import io.druid.query.aggregation.MetricManipulationFn;
 
 import javax.annotation.Nullable;
 
-public class LuceneQueryToolChest extends
-    QueryToolChest<Result<LuceneQueryResultValue>, LuceneDruidQuery>
+public class LuceneQueryToolChest extends QueryToolChest<Result<LuceneQueryResultValue>, LuceneDruidQuery>
 {
   @Override
-  public QueryRunner<Result<LuceneQueryResultValue>> mergeResults(
-      final QueryRunner<Result<LuceneQueryResultValue>> baseRunner
-  )
-
+  public QueryRunner<Result<LuceneQueryResultValue>> mergeResults(final QueryRunner<Result<LuceneQueryResultValue>> baseRunner)
   {
-    return new ResultMergeQueryRunner<Result<LuceneQueryResultValue>>(
-        baseRunner)
+    return new ResultMergeQueryRunner<Result<LuceneQueryResultValue>>(baseRunner)
     {
       @Override
       protected Ordering<Result<LuceneQueryResultValue>> makeOrdering(
@@ -74,15 +69,16 @@ public class LuceneQueryToolChest extends
             } else if (result2 == null) {
               return result1;
             } else {
-              return new Result<>(JodaUtils.minDateTime(
-                  result1.getTimestamp(),
-                  result2.getTimestamp()
-              ), new LuceneQueryResultValue(result1
-                                                .getValue().getSize() + result1.getValue().getSize(), result1
-                                                                                                          .getValue()
-                                                                                                          .getCount()
-                                                                                                      + result2.getValue()
-                                                                                                               .getCount()));
+              return new Result<>(
+                  JodaUtils.minDateTime(
+                      result1.getTimestamp(),
+                      result2.getTimestamp()
+                  ),
+                  new LuceneQueryResultValue(
+                      result1.getValue().getSize() + result2.getValue().getSize(),
+                      result1.getValue().getCount() + result2.getValue().getCount()
+                  )
+              );
             }
           }
         };

@@ -106,14 +106,12 @@ public class LuceneQueryRunnerFactory implements
         String queryString = luceneDruidQuery.getQueryString();
         log.info("query string: " + queryString);
         Analyzer analyzer = new StandardAnalyzer();
-        QueryParser parser = new QueryParser(
-            luceneDruidQuery.getDefaultField(), analyzer);
+        QueryParser parser = new QueryParser(luceneDruidQuery.getDefaultField(), analyzer);
         if (reader != null) {
-          log.info("we have a reader to search with " + reader.numDocs()
-                   + " docs");
-          org.apache.lucene.search.Query luceneQuery = (queryString == null || "*"
-              .equals(queryString)) ? new MatchAllDocsQuery() : parser
-                                                           .parse(queryString);
+          log.info("we have a reader to search with " + reader.numDocs() + " docs");
+          org.apache.lucene.search.Query luceneQuery = (queryString == null || "*".equals(queryString))
+                                                       ? new MatchAllDocsQuery()
+                                                       : parser.parse(queryString);
           log.info("lucene query: " + luceneQuery);
           IndexSearcher searcher = new IndexSearcher(reader);
           TopDocs td = searcher
@@ -135,13 +133,8 @@ public class LuceneQueryRunnerFactory implements
         }
       }
       return Sequences.simple(ImmutableList.of(new Result<>(
-          segment
-              .getDataInterval()
-              .getStart(),
-          new LuceneQueryResultValue(
-              numHits,
-              segment.numRows()
-          )
+          segment.getDataInterval().getStart(),
+          new LuceneQueryResultValue(numHits, segment.numRows())
       )));
     }
   }

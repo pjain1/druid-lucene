@@ -270,8 +270,7 @@ public class LuceneAppenderator implements Appenderator, Runnable
   public int add(
       SegmentIdentifier identifier, InputRow row,
       Supplier<Committer> committerSupplier
-  ) throws IndexSizeExceededException,
-           SegmentNotWritableException
+  ) throws IndexSizeExceededException, SegmentNotWritableException
   {
     LuceneDruidSegment segment = segments.get(identifier);
 
