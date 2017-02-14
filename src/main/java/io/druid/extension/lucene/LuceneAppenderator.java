@@ -505,7 +505,7 @@ public class LuceneAppenderator implements Appenderator, Runnable
       }
       catch (InterruptedException ie) {
         Thread.currentThread().interrupt();
-        throw new RuntimeException("Interrupted!!");
+        log.warn("Stopping index refresh as the thread is interrupted !!");
       }
     }
   }

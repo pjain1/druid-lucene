@@ -54,8 +54,7 @@ public class LuceneQueryResultValue
   @Override
   public String toString()
   {
-    return "LuceneQueryResultValue{" + "count=" + count + ", " + "size=" + size
-           + '}';
+    return "LuceneQueryResultValue{" + "count=" + count + ", " + "size=" + size + '}';
   }
 
   @Override
